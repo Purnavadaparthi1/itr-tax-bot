@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: itr-tax-bot-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MODEL_NAME
+        value: gemini-2.5-flash
+      - key: PYTHON_VERSION
+        value: 3.11
