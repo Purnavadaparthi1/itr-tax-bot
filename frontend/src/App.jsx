@@ -38,13 +38,15 @@ function App() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Disabled auto-scroll - user can scroll manually
+  // const scrollToBottom = () => {
+  //   messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isTyping]);
+  // Don't auto-scroll - let user scroll manually
+  // useEffect(() => {
+  //   scrollToBottom();
+  // }, [messages, isTyping]);
 
   const handleSendMessage = async (messageText) => {
     const text = messageText || inputMessage.trim();
