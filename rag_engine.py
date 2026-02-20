@@ -1,4 +1,3 @@
-#rag_engine
 import pandas as pd
 import json
 from datetime import datetime
@@ -18,6 +17,9 @@ employee_df = pd.read_csv("data/employees.csv")
 
 with open("data/holidays.json", "r") as f:
     holiday_data = json.load(f)
+
+with open("data/paydates.json", "r") as f:
+    paydates_data = json.load(f)
 
 # =====================================================
 # Load Vector Store (Policies Only)
@@ -41,7 +43,7 @@ def retrieve_context(question: str):
     q = question.lower().strip()
 
     # =====================================================
-    # 1️⃣ SALARY FILTER (FIRST – to avoid conflict)
+    # 1️⃣ SALARY FILTER
     # =====================================================
     salary_match = re.search(r"(greater than|more than|above|less than|below|>|<)\s*(\d+)", q)
 
@@ -66,7 +68,7 @@ def retrieve_context(question: str):
         return f"{len(filtered)} employees match the salary condition."
 
     # =====================================================
-    # 2️⃣ COUNT HOLIDAYS
+    # 2️⃣ HOLIDAY COUNT
     # =====================================================
     if "holiday" in q and "how many" in q:
         return f"There are {len(holiday_data['holidays'])} holidays in 2026."
@@ -110,13 +112,56 @@ def retrieve_context(question: str):
             return f"{holiday['occasion']} is on {holiday['date']} ({holiday['day']})."
 
     # =====================================================
-    # 6️⃣ STRICT EMPLOYEE COUNT
+    # 6️⃣ PAY DATE COUNT
+    # =====================================================
+    if "pay" in q and "how many" in q:
+        return f"There are {len(paydates_data['pay_dates'])} pay dates in 2026."
+
+    # =====================================================
+    # 7️⃣ LIST PAY DATES
+    # =====================================================
+    if "pay" in q and any(word in q for word in ["list", "show", "all"]):
+        pay_list = "\n".join(
+            [
+                f"{p['month']} Salary → {p['date']} ({p['day']})"
+                for p in paydates_data["pay_dates"]
+            ]
+        )
+        return f"Here are the 2026 pay dates:\n{pay_list}"
+
+    # =====================================================
+    # 8️⃣ UPCOMING PAY DATE
+    # =====================================================
+    if "upcoming" in q and "pay" in q:
+        today = datetime.today()
+        upcoming = None
+        upcoming_date = None
+
+        for p in paydates_data["pay_dates"]:
+            p_date = datetime.strptime(p["date"], "%d-%b-%y")
+            if p_date >= today:
+                if upcoming_date is None or p_date < upcoming_date:
+                    upcoming_date = p_date
+                    upcoming = p
+
+        if upcoming:
+            return f"Upcoming pay date is {upcoming['date']} ({upcoming['day']}) for {upcoming['month']} salary."
+
+    # =====================================================
+    # 9️⃣ PAY DATE BY MONTH
+    # =====================================================
+    for p in paydates_data["pay_dates"]:
+        if p["month"].lower() in q:
+            return f"{p['month']} salary will be credited on {p['date']} ({p['day']})."
+
+    # =====================================================
+    # 🔟 STRICT EMPLOYEE COUNT
     # =====================================================
     if re.fullmatch(r"how many employees\??", q):
         return f"There are {len(employee_df)} employees."
 
     # =====================================================
-    # 7️⃣ EMPLOYEE ID MATCH
+    # 1️⃣1️⃣ EMPLOYEE ID MATCH
     # =====================================================
     for word in q.split():
         if word.isdigit():
@@ -126,7 +171,7 @@ def retrieve_context(question: str):
                 return employee_field_response(last_employee, q)
 
     # =====================================================
-    # 8️⃣ EMPLOYEE NAME MATCH
+    # 1️⃣2️⃣ EMPLOYEE NAME MATCH
     # =====================================================
     for _, row in employee_df.iterrows():
         if row["Emp_Name"].lower() in q:
@@ -134,7 +179,7 @@ def retrieve_context(question: str):
             return employee_field_response(row, q)
 
     # =====================================================
-    # 9️⃣ PRONOUN FOLLOW-UP
+    # 1️⃣3️⃣ PRONOUN FOLLOW-UP
     # =====================================================
     if last_employee is not None and any(
         word in q for word in ["his", "her", "him", "he", "she"]
@@ -142,7 +187,7 @@ def retrieve_context(question: str):
         return employee_field_response(last_employee, q)
 
     # =====================================================
-    # 🔟 POLICY / HANDBOOK (RAG)
+    # 1️⃣4️⃣ POLICY / HANDBOOK (RAG)
     # =====================================================
     if any(word in q for word in ["policy", "leave", "break", "working hours", "attendance"]):
         docs = vectorstore.similarity_search(question, k=2)
