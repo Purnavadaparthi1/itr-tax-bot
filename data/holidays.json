@@ -1,0 +1,80 @@
+{
+  "document_date": "04-12-2025",
+  "title": "List of Holidays-2026",
+  "country": "India",
+  "company": "DevRabbit",
+  "holidays": [
+    {
+      "sno": 1,
+      "occasion": "New Year's Day",
+      "date": "01-Jan-26",
+      "day": "Thursday"
+    },
+    {
+      "sno": 2,
+      "occasion": "Sankranthi",
+      "date": "14-Jan-26",
+      "day": "Wednesday"
+    },
+    {
+      "sno": 3,
+      "occasion": "Kanuma",
+      "date": "15-Jan-26",
+      "day": "Thursday"
+    },
+    {
+      "sno": 4,
+      "occasion": "Republic Day",
+      "date": "26-Jan-26",
+      "day": "Monday"
+    },
+    {
+      "sno": 5,
+      "occasion": "Holi",
+      "date": "04-Mar-26",
+      "day": "Wednesday"
+    },
+    {
+      "sno": 6,
+      "occasion": "Ugadi",
+      "date": "19-Mar-26",
+      "day": "Thursday"
+    },
+    {
+      "sno": 7,
+      "occasion": "Telangana Formation Day",
+      "date": "02-Jun-26",
+      "day": "Tuesday"
+    },
+    {
+      "sno": 8,
+      "occasion": "Ganesh Chaturthi",
+      "date": "14-Sep-26",
+      "day": "Monday"
+    },
+    {
+      "sno": 9,
+      "occasion": "Mahatma Gandhi Jayanti",
+      "date": "02-Oct-26",
+      "day": "Friday"
+    },
+    {
+      "sno": 10,
+      "occasion": "Dussehra",
+      "date": "20-Oct-26",
+      "day": "Tuesday"
+    },
+    {
+      "sno": 11,
+      "occasion": "Diwali",
+      "date": "09-Nov-26",
+      "day": "Monday"
+    },
+    {
+      "sno": 12,
+      "occasion": "Christmas",
+      "date": "25-Dec-26",
+      "day": "Friday"
+    }
+  ]
+}

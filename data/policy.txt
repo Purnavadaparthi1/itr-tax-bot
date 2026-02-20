@@ -1,0 +1,3 @@
+Employees are entitled to 12 casual leaves per year.
+Leaves must be applied at least one day in advance.
+Unused leaves cannot be carried forward.

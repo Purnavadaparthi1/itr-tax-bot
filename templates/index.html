@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Employee Assistant</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Inter', sans-serif;
+}
+
+body {
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Main Card */
+.app-container {
+    width: 420px;
+    height: 90vh;
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(12px);
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+}
+
+/* Header */
+.header {
+    padding: 18px;
+    text-align: center;
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #60a5fa;
+}
+
+.header p {
+    font-size: 13px;
+    color: #94a3b8;
+}
+
+/* Chat Area */
+.chat-container {
+    flex: 1;
+    padding: 18px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Messages */
+.message {
+    max-width: 85%;
+    padding: 14px 16px;
+    border-radius: 16px;
+    margin-bottom: 14px;
+    font-size: 14px;
+    line-height: 1.5;
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.bot {
+    align-self: flex-start;
+    background: #1e293b;
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Input */
+.input-container {
+    padding: 14px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    background: rgba(255,255,255,0.05);
+}
+
+input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #ffffff;
+    font-size: 14px;
+}
+
+input::placeholder {
+    color: #6388bd;
+    opacity: 1;
+}
+
+button {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    border: none;
+    padding: 10px 16px;
+    border-radius: 12px;
+    cursor: pointer;
+    color: white;
+    font-weight: 500;
+    transition: 0.3s;
+}
+
+button:hover {
+    transform: scale(1.05);
+}
+
+/* Scrollbar */
+.chat-container::-webkit-scrollbar {
+    width: 4px;
+}
+.chat-container::-webkit-scrollbar-thumb {
+    background: #3b82f6;
+    border-radius: 10px;
+}
+
+/* Animation */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app-container">
+
+    <div class="header">
+        <h1>🤖 Employee AI Assistant</h1>
+        <p>Ask about employees, attendance & HR policies</p>
+    </div>
+
+    <div class="chat-container" id="chat"></div>
+
+    <div class="input-container">
+        <input id="question"
+               type="text"
+               placeholder="Type your question..."
+               onkeydown="handleEnter(event)" />
+        <button onclick="askQuestion()">Send</button>
+    </div>
+
+</div>
+
+<script>
+
+/* ✅ Auto welcome message on page load */
+window.onload = function() {
+    const chat = document.getElementById("chat");
+
+    const welcomeMessage = document.createElement("div");
+    welcomeMessage.className = "message bot";
+    welcomeMessage.innerText = "Hi, how can I help you?";
+
+    chat.appendChild(welcomeMessage);
+};
+
+async function askQuestion() {
+    const input = document.getElementById("question");
+    const chat = document.getElementById("chat");
+
+    const question = input.value.trim();
+    if (!question) return;
+
+    chat.innerHTML += `<div class="message user">${question}</div>`;
+    input.value = "";
+
+    const botMessage = document.createElement("div");
+    botMessage.className = "message bot";
+    botMessage.innerText = "Typing...";
+    chat.appendChild(botMessage);
+    chat.scrollTop = chat.scrollHeight;
+
+    const response = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question })
+    });
+
+    const data = await response.json();
+    botMessage.innerText = data.answer;
+
+    chat.scrollTop = chat.scrollHeight;
+}
+
+function handleEnter(event) {
+    if (event.key === "Enter") {
+        askQuestion();
+    }
+}
+</script>
+
+</body>
+</html>
