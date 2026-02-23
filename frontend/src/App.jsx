@@ -328,14 +328,63 @@ function App() {
                     if (result.type === 'form16' && result.data) {
                       // Store Form 16 data
                       setForm16Data(result.data);
-                      handleSendMessage(`I've uploaded my Form 16 (${result.data.financial_year}). Employee: ${result.data.employee_name}, Gross Salary: ₹${Math.round(result.data.gross_salary || 0).toLocaleString()}, TDS Deducted: ₹${Math.round(result.data.tds_deducted || 0).toLocaleString()}. Please help me with tax planning and ITR filing.`);
+                      const d = result.data;
+                      const fields = [
+                        { k: 'employee_name', l: 'Employee' },
+                        { k: 'pan', l: 'PAN' },
+                        { k: 'financial_year', l: 'FY' },
+                        { k: 'employer_name', l: 'Employer' },
+                        { k: 'gross_salary', l: 'Gross Salary' },
+                        { k: 'basic_salary', l: 'Basic' },
+                        { k: 'hra', l: 'HRA' },
+                        { k: 'tds_deducted', l: 'TDS' },
+                      ];
+                      const details = fields
+                        .map(f => {
+                            const value = d[f.k];
+                            if (!value) return null;
+                            if (typeof value === 'number') {
+                                return `${f.l}: ₹${Math.round(value).toLocaleString('en-IN')}`;
+                            }
+                            return `${f.l}: ${value}`;
+                        })
+                        .filter(Boolean)
+                        .join(', ');
+                      handleSendMessage(`I've uploaded my Form 16. Extracted data: ${details}. Please help me with tax planning and ITR filing.`);
                     } else if (result.data) {
                       // Handle payslip data
                       setUserContext(prev => ({
                         ...prev,
                         ...result.data
                       }));
-                      handleSendMessage(`I've uploaded my payslip. Extracted data: Salary - ₹${Math.round(result.data.salary_income || 0)}, HRA - ₹${Math.round(result.data.hra || 0)}. Please help me with tax planning.`);
+                      
+                      const d = result.data;
+                      const fields = [
+                        { k: 'employee_name', l: 'Employee' },
+                        { k: 'pan', l: 'PAN' },
+                        { k: 'pay_period', l: 'Period' },
+                        { k: 'salary_income', l: 'Basic' },
+                        { k: 'hra', l: 'HRA' },
+                        { k: 'conveyance', l: 'Conveyance' },
+                        { k: 'medical_allowance', l: 'Medical' },
+                        { k: 'special_allowance', l: 'Special' },
+                        { k: 'epf', l: 'EPF' },
+                        { k: 'professional_tax', l: 'PT' },
+                        { k: 'tax_deducted', l: 'TDS' },
+                        { k: 'net_pay', l: 'Net Pay' }
+                      ];
+                      const details = fields
+                        .map(f => {
+                            const value = d[f.k];
+                            if (!value) return null; // Excludes 0, "", null, undefined
+                            if (typeof value === 'number') {
+                                return `${f.l}: ₹${Math.round(value).toLocaleString('en-IN')}`;
+                            }
+                            return `${f.l}: ${value}`;
+                        })
+                        .filter(Boolean)
+                        .join(', ');
+                      handleSendMessage(`I've uploaded my payslip. Extracted data: ${details}. Please help me with tax planning.`);
                     }
                   }} />
                 </motion.div>

@@ -676,10 +676,13 @@ Provide a helpful, accurate response. If you're collecting information, suggest 
             # Generate suggestions based on conversation stage
             suggestions = self._generate_suggestions(user_message, context)
             
+            # Sanitize context before returning to UI
+            safe_context = _sanitize_obj(context or {})
+            
             return ChatResponse(
                 response=ai_response,
                 suggestions=suggestions,
-                data_collected=context or {},
+                data_collected=safe_context,
                 next_step=self._determine_next_step(context)
             )
             
@@ -1113,27 +1116,31 @@ async def upload_payslip(file: UploadFile = File(...)):
                         except Exception:
                             return 0.0
                     return 0.0
-
-            def _find_amount(data, candidates):
-                # exact key match (case-insensitive)
-                for cand in candidates:
-                    for k in data.keys():
-                        if k and k.lower() == cand.lower():
-                            return _parse_number(data.get(k))
-                # nested dicts
+            
+            # Helper: recursive search for values in nested JSON
+            def _find_value_recursive(data, candidates):
+                if not isinstance(data, dict):
+                    return None
+                # Check current level keys
+                for k, v in data.items():
+                    if isinstance(k, str):
+                        k_lower = k.lower()
+                        for cand in candidates:
+                            if cand.lower() in k_lower:
+                                if not isinstance(v, dict):
+                                    return v
+                # Recurse into nested dicts
                 for v in data.values():
                     if isinstance(v, dict):
-                        for cand in candidates:
-                            for k2 in v.keys():
-                                if k2 and k2.lower() == cand.lower():
-                                    return _parse_number(v.get(k2))
-                # substring match
-                for k in data.keys():
-                    if not isinstance(k, str):
-                        continue
-                    for cand in candidates:
-                        if cand.lower() in k.lower():
-                            return _parse_number(data.get(k))
+                        res = _find_value_recursive(v, candidates)
+                        if res is not None:
+                            return res
+                return None
+
+            def _find_amount(data, candidates):
+                val = _find_value_recursive(data, candidates)
+                if val is not None:
+                    return _parse_number(val)
                 # try raw text
                 raw = data.get('raw_text') or data.get('text') or ''
                 if raw:
@@ -1142,6 +1149,12 @@ async def upload_payslip(file: UploadFile = File(...)):
                     if m:
                         return _parse_number(m.group(2))
                 return 0.0
+
+            def _find_string(data, candidates):
+                val = _find_value_recursive(data, candidates)
+                if val and isinstance(val, str):
+                    return val.strip()
+                return ""
 
             # Extract income components into structured format (robust)
             data_collected = {
@@ -1174,8 +1187,8 @@ async def upload_payslip(file: UploadFile = File(...)):
                     "epf", "employee provident fund", "epf contribution", "pf", "provident fund"
                 ]),
                 "professional_tax": _find_amount(extracted_data, ["professional_tax", "pt", "professional tax"]),
-                "employee_name": extracted_data.get("employee_name", extracted_data.get("Employee Name", "")),
-                "pay_period": extracted_data.get("pay_period", extracted_data.get("pay_period", ""))
+                "employee_name": _find_string(extracted_data, ["employee_name", "employee name", "name of employee"]),
+                "pay_period": _find_string(extracted_data, ["pay_period", "pay period", "month", "period"])
             }
 
             # Fallback: if basic salary not found, use gross or net pay as salary_income
@@ -1184,18 +1197,58 @@ async def upload_payslip(file: UploadFile = File(...)):
                 if fallback_salary and fallback_salary > 0:
                     data_collected["salary_income"] = fallback_salary
 
-            # Log the raw extraction and final values for debugging
-            try:
-                logger.info(f"Payslip extracted_data keys: {list(extracted_data.keys())}")
-                raw_preview = (extracted_data.get('raw_text') or '')[:1200]
-                if raw_preview:
-                    logger.debug(f"Payslip raw_text preview: {raw_preview}")
-                logger.info(f"Payslip final data_collected: {data_collected}")
-            except Exception:
-                logger.exception("Error logging payslip extraction details")
+            # Generate detailed summary message to show all extracted data
+            details = []
+
+            # Handle PAN separately for masking and add it to data_collected
+            pan_val = _find_string(extracted_data, ["pan", "pan number", "pan_no"])
+            if pan_val:
+                masked_pan = _mask_pan_value(pan_val)
+                data_collected["pan"] = masked_pan
+
+            # Define display order and labels for a clean presentation
+            display_order_and_labels = [
+                ("employee_name", "Employee"),
+                ("pan", "PAN"),
+                ("pay_period", "Period"),
+                ("salary_income", "Basic Salary"),
+                ("hra", "HRA"),
+                ("conveyance", "Conveyance"),
+                ("medical_allowance", "Medical Allowance"),
+                ("education_allowance", "Education Allowance"),
+                ("special_allowance", "Special Allowance"),
+                ("epf", "EPF"),
+                ("professional_tax", "Professional Tax"),
+                ("tax_deducted", "TDS"),
+                ("net_pay", "Net Pay"),
+            ]
+
+            processed_keys = set()
+            # Add fields from the ordered list first
+            for key, label in display_order_and_labels:
+                value = data_collected.get(key)
+                if value:
+                    if isinstance(value, (int, float)) and value > 0:
+                        details.append(f"{label}: ₹{value:,.0f}")
+                    elif isinstance(value, str) and value.strip():
+                        details.append(f"{label}: {value}")
+                    processed_keys.add(key)
+
+            # Add any other remaining fields from data_collected
+            for key, value in data_collected.items():
+                if key not in processed_keys and key != "allowances" and value:
+                    label = key.replace('_', ' ').title()
+                    if isinstance(value, (int, float)) and value > 0:
+                        details.append(f"{label}: ₹{value:,.0f}")
+                    elif isinstance(value, str) and value.strip():
+                        details.append(f"{label}: {value}")
             
-            logger.info(f"Payslip analysis successful. Confidence: {confidence}")
-            
+            success_msg = f"Payslip analyzed. Found: {', '.join(details)}" if details else f"Payslip analyzed successfully. Confidence: {confidence:.0%}"
+
+            # Log the final extracted data for debugging
+            logger.info(f"{success_msg}")
+            logger.info(f"Payslip extracted data: {data_collected}")
+
             # Persist extraction log
             try:
                 record = {
@@ -1206,19 +1259,23 @@ async def upload_payslip(file: UploadFile = File(...)):
                     "extracted_data": extracted_data,
                     "data_collected": data_collected,
                     "confidence": confidence,
-                    "message": f"Payslip analyzed successfully. Confidence: {confidence:.2f}",
+                    "message": success_msg,
                     "raw_text_preview": (response_text or '')[:2000]
                 }
                 _append_extraction_log(record)
             except Exception:
                 logger.exception("Failed to persist payslip extraction log")
 
+            # Sanitize data for UI response
+            safe_extracted_data = _sanitize_obj(extracted_data)
+            safe_data_collected = _sanitize_obj(data_collected)
+
             return PayslipAnalysisResponse(
                 success=True,
-                message=f"Payslip analyzed successfully. Confidence: {confidence:.0%}",
-                extracted_data=extracted_data,
+                message=success_msg,
+                extracted_data=safe_extracted_data,
                 confidence=confidence,
-                data_collected=data_collected
+                data_collected=safe_data_collected
             )
             
         except Exception as e:
@@ -1426,8 +1483,48 @@ async def upload_form16(file: UploadFile = File(...)):
                     if notes:
                         warnings.append(f"Notes from analysis: {notes}")
                     
+                    # Log before masking for UI
                     logger.info(f"Form 16 analysis successful. Confidence: {confidence:.0%}")
+                    logger.info(f"Form 16 extracted data: {extracted_form16.dict()}")
+
+                    # Sanitize the entire object for the UI response
+                    extracted_form16 = Form16Data(**_sanitize_obj(extracted_form16.dict()))
                     
+                    # Generate detailed summary for Form 16 to show all extracted data
+                    f16_details = []
+                    
+                    # Define display order and labels for Form16Data model
+                    f16_display_order_and_labels = [
+                        ("employee_name", "Employee"),
+                        ("pan", "PAN"),
+                        ("employer_name", "Employer"),
+                        ("employer_tan", "TAN"),
+                        ("financial_year", "FY"),
+                        ("gross_salary", "Gross Salary"),
+                        ("basic_salary", "Basic Salary"),
+                        ("hra", "HRA"),
+                        ("dearness_allowance", "DA"),
+                        ("other_allowances", "Other Allowances"),
+                        ("total_salary", "Total Salary"),
+                        ("epf_contribution", "EPF"),
+                        ("tds_deducted", "TDS Deducted"),
+                        ("income_tax_deducted", "Income Tax")
+                    ]
+
+                    # Iterate through the defined fields to ensure order and clarity
+                    for attr, label in f16_display_order_and_labels:
+                        value = getattr(extracted_form16, attr, None)
+                        if value: # Check for non-empty/non-zero values
+                            if isinstance(value, (int, float)):
+                                if value > 0:
+                                    f16_details.append(f"{label}: ₹{value:,.0f}")
+                            elif isinstance(value, str) and value.strip():
+                                f16_details.append(f"{label}: {value}")
+                            
+                    success_msg = f"Form 16 analyzed. Found: {', '.join(f16_details)}"
+                    if warnings:
+                        success_msg += f" ({len(warnings)} warnings)"
+
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON parsing error: {str(e)}")
                     warnings.append("Could not parse extracted data as JSON")
@@ -1460,8 +1557,7 @@ async def upload_form16(file: UploadFile = File(...)):
 
             return Form16AnalysisResponse(
                 success=True,
-                message=f"Form 16 analyzed successfully. Confidence: {confidence:.0%}" + 
-                        (f" ({len(warnings)} warnings)" if warnings else ""),
+                message=success_msg if 'success_msg' in locals() else f"Form 16 analyzed successfully. Confidence: {confidence:.0%}",
                 extracted_data=extracted_form16,
                 confidence=confidence,
                 warnings=warnings
