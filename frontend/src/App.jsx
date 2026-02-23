@@ -9,7 +9,8 @@ import {
   Menu,
   X,
   Sparkles,
-  IndianRupee
+  IndianRupee,
+  Shield
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import ChatMessage, { TypingIndicator } from './components/ChatMessage';
@@ -34,6 +35,7 @@ function App() {
   const [showPayslipUpload, setShowPayslipUpload] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [userContext, setUserContext] = useState({});
+  const [form16Data, setForm16Data] = useState(null);
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -65,8 +67,8 @@ function App() {
     setIsTyping(true);
 
     try {
-      // Send to API
-      const response = await sendMessage(sessionId, text, userContext);
+      // Send to API with form16_data if available
+      const response = await sendMessage(sessionId, text, userContext, form16Data);
       
       // Add assistant response
       const assistantMessage = {
@@ -111,6 +113,7 @@ function App() {
         await clearSession(sessionId);
         setMessages([]);
         setUserContext({});
+        setForm16Data(null);
         setSuggestions([
           "I'm a salaried employee",
           "I have business income",
@@ -131,7 +134,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* Animated Background Orbs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="floating-orb w-96 h-96 bg-primary-600 top-0 -left-48" 
@@ -146,7 +149,7 @@ function App() {
       <motion.header
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="glass-card border-b border-white/10 sticky top-0 z-50"
+        className="glass-card border-b border-white/10 sticky top-0 z-50 flex-shrink-0"
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
@@ -165,10 +168,10 @@ function App() {
             </div>
 
             {/* Actions */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowCalculator(!showCalculator)}
-                className={`btn-secondary flex items-center gap-2 ${
+                className={`btn-secondary flex items-center gap-2 px-3 py-2 text-sm ${
                   showCalculator ? 'bg-primary-600/20 border-primary-500/50' : ''
                 }`}
               >
@@ -178,7 +181,7 @@ function App() {
 
               <button
                 onClick={() => setShowPayslipUpload(!showPayslipUpload)}
-                className={`btn-secondary flex items-center gap-2 ${
+                className={`btn-secondary flex items-center gap-2 px-3 py-2 text-sm ${
                   showPayslipUpload ? 'bg-primary-600/20 border-primary-500/50' : ''
                 }`}
               >
@@ -186,32 +189,38 @@ function App() {
                 <span className="hidden sm:inline">Upload</span>
               </button>
               
-              {messages.length > 0 && (
-                <button
-                  onClick={handleClearChat}
-                  className="btn-secondary flex items-center gap-2 text-red-400 
-                             hover:bg-red-500/10 hover:border-red-500/50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Clear</span>
-                </button>
-              )}
+              <button
+                onClick={handleClearChat}
+                disabled={messages.length === 0}
+                className="btn-secondary flex items-center gap-2 px-3 py-2 text-sm text-red-400 
+                           hover:bg-red-500/10 hover:border-red-500/50 
+                           disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Clear</span>
+              </button>
             </div>
           </div>
         </div>
       </motion.header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
+      <main className="flex-1 overflow-y-auto flex flex-col px-4 sm:px-6 lg:px-8 py-8">
+        <div className="max-w-7xl mx-auto w-full flex gap-6">
           
           {/* Chat Section */}
-          <div className="lg:col-span-2 flex flex-col">
-            {/* Chat Container */}
-            <div className="glass-card flex-1 flex flex-col">
+          <div className="flex flex-col gap-6 flex-1">
+            
+            {/* Info Cards - Larger Size */}
+            <div className="glass-card p-6 flex-shrink-0">
+              <InfoCards onCardClick={handleSendMessage} />
+            </div>
+
+            {/* Chat Container - Scrollable Messages Only */}
+            <div className="glass-card flex flex-col flex-1 min-h-0 overflow-hidden">
               
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
+              {/* Messages - Only this scrolls */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide min-h-0">
                 {messages.length === 0 ? (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -230,8 +239,6 @@ function App() {
                       Your AI-powered Chartered Accountant for Income Tax Return filing.
                       Ask me anything about ITR, deductions, or tax planning!
                     </p>
-                    
-                    <InfoCards onCardClick={handleSendMessage} />
                   </motion.div>
                 ) : (
                   <>
@@ -249,9 +256,9 @@ function App() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Suggestions */}
-              {suggestions.length > 0 && !isTyping && (
-                <div className="px-6 pb-4">
+              {/* Suggestions - Only show when no messages (initial or after clear) */}
+              {suggestions.length > 0 && !isTyping && messages.length === 0 && (
+                <div className="px-6 pb-4 flex-shrink-0">
                   <SuggestionChips 
                     suggestions={suggestions}
                     onSelect={handleSendMessage}
@@ -259,8 +266,8 @@ function App() {
                 </div>
               )}
 
-              {/* Input */}
-              <div className="p-6 border-t border-white/10">
+              {/* Input - Flex item at Bottom */}
+              <div className="p-6 border-t border-white/10 flex-shrink-0">
                 <div className="flex gap-3">
                   <input
                     ref={inputRef}
@@ -278,7 +285,7 @@ function App() {
                     onClick={() => handleSendMessage()}
                     disabled={!inputMessage.trim() || isTyping}
                     className="btn-primary w-14 h-14 flex items-center justify-center 
-                               disabled:opacity-50 disabled:cursor-not-allowed"
+                               disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                   >
                     <Send className="w-5 h-5" />
                   </button>
@@ -293,7 +300,7 @@ function App() {
           </div>
 
           {/* Sidebar */}
-          <div className="lg:col-span-1 space-y-6">
+          <div className="lg:w-1/3 overflow-y-auto scrollbar-hide space-y-6">
             {/* Tax Calculator */}
             <AnimatePresence>
               {showCalculator && (
@@ -317,12 +324,19 @@ function App() {
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
                 >
-                  <PayslipUpload onDataExtracted={(data) => {
-                    setUserContext(prev => ({
-                      ...prev,
-                      ...data
-                    }));
-                    handleSendMessage(`I've uploaded my payslip. Extracted data: Salary - ₹${Math.round(data.salary_income || 0)}, HRA - ₹${Math.round(data.hra || 0)}. Please help me with tax planning.`);
+                  <PayslipUpload onDataExtracted={(result) => {
+                    if (result.type === 'form16' && result.data) {
+                      // Store Form 16 data
+                      setForm16Data(result.data);
+                      handleSendMessage(`I've uploaded my Form 16 (${result.data.financial_year}). Employee: ${result.data.employee_name}, Gross Salary: ₹${Math.round(result.data.gross_salary || 0).toLocaleString()}, TDS Deducted: ₹${Math.round(result.data.tds_deducted || 0).toLocaleString()}. Please help me with tax planning and ITR filing.`);
+                    } else if (result.data) {
+                      // Handle payslip data
+                      setUserContext(prev => ({
+                        ...prev,
+                        ...result.data
+                      }));
+                      handleSendMessage(`I've uploaded my payslip. Extracted data: Salary - ₹${Math.round(result.data.salary_income || 0)}, HRA - ₹${Math.round(result.data.hra || 0)}. Please help me with tax planning.`);
+                    }
                   }} />
                 </motion.div>
               )}
@@ -398,7 +412,7 @@ function App() {
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.4 }}
-        className="glass-card border-t border-white/10 py-4"
+        className="glass-card border-t border-white/10 py-4 flex-shrink-0"
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <p className="text-center text-xs text-dark-500">
@@ -409,8 +423,5 @@ function App() {
     </div>
   );
 }
-
-// Add Shield import
-import { Shield } from 'lucide-react';
 
 export default App;

@@ -10,12 +10,19 @@ const api = axios.create({
 });
 
 // Chat API
-export const sendMessage = async (sessionId, message, context = {}) => {
-  const response = await api.post('/api/chat', {
+export const sendMessage = async (sessionId, message, context = {}, form16Data = null) => {
+  const payload = {
     session_id: sessionId,
     message,
     context,
-  });
+  };
+  
+  // Include form16_data if available
+  if (form16Data) {
+    payload.form16_data = form16Data;
+  }
+  
+  const response = await api.post('/api/chat', payload);
   return response.data;
 };
 
@@ -85,6 +92,19 @@ export const uploadPayslip = async (file) => {
   formData.append('file', file);
   
   const response = await api.post('/api/upload-payslip', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+};
+
+// Upload and analyze Form 16
+export const uploadForm16 = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await api.post('/api/upload-form16', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },

@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: itr-tax-bot-backend:latest
+    ports:
+      - "8001:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - MODEL_NAME=${MODEL_NAME:-gemini-2.5-flash}
+    volumes:
+      - ./backend/logs:/app/logs
+    restart: unless-stopped
