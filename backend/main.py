@@ -121,7 +121,8 @@ def _sanitize_record_for_logging(record: dict) -> dict:
     """
     try:
         safe = dict(record)
-        # Sanitize nested extracted_data and form16 payloads
+        # Sanitize nested extracted_
+        # and form16 payloads
         if 'extracted_data' in safe and isinstance(safe['extracted_data'], dict):
             safe['extracted_data'] = _sanitize_obj(safe['extracted_data'])
         if 'data_collected' in safe and isinstance(safe['data_collected'], dict):
@@ -1088,109 +1089,110 @@ async def upload_payslip(file: UploadFile = File(...)):
             else:
                 extracted_data = {"raw_text": response_text}
                 confidence = 0.5
-            
-            # Extract income components into structured format
-                # Helper: robust number parsing and flexible key matching
-                def _parse_number(val):
-                    if val is None:
-                        return 0.0
-                    if isinstance(val, (int, float)):
-                        return float(val)
-                    s = str(val)
-                    # remove common currency symbols and whitespace
-                    s = re.sub(r'[₹$,\s]', '', s)
-                    # handle parentheses as negative
-                    s = s.replace('(', '-').replace(')', '')
-                    try:
-                        return float(s)
-                    except Exception:
-                        m = re.search(r'-?\d[\d,\.]*', str(val))
-                        if m:
-                            try:
-                                return float(m.group().replace(',', ''))
-                            except Exception:
-                                return 0.0
-                        return 0.0
 
-                def _find_amount(data, candidates):
-                    # exact key match (case-insensitive)
-                    for cand in candidates:
-                        for k in data.keys():
-                            if k and k.lower() == cand.lower():
-                                return _parse_number(data.get(k))
-                    # nested dicts
-                    for v in data.values():
-                        if isinstance(v, dict):
-                            for cand in candidates:
-                                for k2 in v.keys():
-                                    if k2 and k2.lower() == cand.lower():
-                                        return _parse_number(v.get(k2))
-                    # substring match
-                    for k in data.keys():
-                        if not isinstance(k, str):
-                            continue
-                        for cand in candidates:
-                            if cand.lower() in k.lower():
-                                return _parse_number(data.get(k))
-                    # try raw text
-                    raw = data.get('raw_text') or data.get('text') or ''
-                    if raw:
-                        pattern = r'(' + '|'.join([re.escape(c) for c in candidates]) + r')[^\d\n\r]{0,30}([₹₹]?\s*[\d,]+\.?\d*)'
-                        m = re.search(pattern, raw, re.IGNORECASE)
-                        if m:
-                            return _parse_number(m.group(2))
+            # Extract income components into structured format
+            # Ensure this logic is NOT indented inside the else block
+            # Helper: robust number parsing and flexible key matching
+            def _parse_number(val):
+                if val is None:
+                    return 0.0
+                if isinstance(val, (int, float)):
+                    return float(val)
+                s = str(val)
+                # remove common currency symbols and whitespace
+                s = re.sub(r'[₹$,\s]', '', s)
+                # handle parentheses as negative
+                s = s.replace('(', '-').replace(')', '')
+                try:
+                    return float(s)
+                except Exception:
+                    m = re.search(r'-?\d[\d,\.]*', str(val))
+                    if m:
+                        try:
+                            return float(m.group().replace(',', ''))
+                        except Exception:
+                            return 0.0
                     return 0.0
 
-                # Extract income components into structured format (robust)
-                data_collected = {
-                    "salary_income": _find_amount(extracted_data, [
-                        "basic_salary", "basic", "basic pay", "basic salary", "basic_salary"
-                    ]),
-                    "hra": _find_amount(extracted_data, [
-                        "hra", "house rent allowance", "house rent", "h r a"
-                    ]),
-                    "conveyance": _find_amount(extracted_data, [
-                        "conveyance", "conveyance allowance", "conveyance allowance"
-                    ]),
-                    "medical_allowance": _find_amount(extracted_data, [
-                        "medical", "medical allowance", "med allowance"
-                    ]),
-                    "education_allowance": _find_amount(extracted_data, [
-                        "education", "education allowance", "edu allowance"
-                    ]),
-                    "special_allowance": _find_amount(extracted_data, [
-                        "special", "special allowance", "special al"
-                    ]),
-                    "net_pay": _find_amount(extracted_data, [
-                        "net_pay", "net pay", "net salary", "take home", "take_home", "take-home"
-                    ]),
-                    "allowances": extracted_data.get("allowances", {}),
-                    "tax_deducted": _find_amount(extracted_data, [
-                        "tax_deducted", "tds", "total tax deducted", "income tax deducted"
-                    ]),
-                    "epf": _find_amount(extracted_data, [
-                        "epf", "employee provident fund", "epf contribution", "pf", "provident fund"
-                    ]),
-                    "professional_tax": _find_amount(extracted_data, ["professional_tax", "pt", "professional tax"]),
-                    "employee_name": extracted_data.get("employee_name", extracted_data.get("Employee Name", "")),
-                    "pay_period": extracted_data.get("pay_period", extracted_data.get("pay_period", ""))
-                }
+            def _find_amount(data, candidates):
+                # exact key match (case-insensitive)
+                for cand in candidates:
+                    for k in data.keys():
+                        if k and k.lower() == cand.lower():
+                            return _parse_number(data.get(k))
+                # nested dicts
+                for v in data.values():
+                    if isinstance(v, dict):
+                        for cand in candidates:
+                            for k2 in v.keys():
+                                if k2 and k2.lower() == cand.lower():
+                                    return _parse_number(v.get(k2))
+                # substring match
+                for k in data.keys():
+                    if not isinstance(k, str):
+                        continue
+                    for cand in candidates:
+                        if cand.lower() in k.lower():
+                            return _parse_number(data.get(k))
+                # try raw text
+                raw = data.get('raw_text') or data.get('text') or ''
+                if raw:
+                    pattern = r'(' + '|'.join([re.escape(c) for c in candidates]) + r')[^\d\n\r]{0,30}([₹₹]?\s*[\d,]+\.?\d*)'
+                    m = re.search(pattern, raw, re.IGNORECASE)
+                    if m:
+                        return _parse_number(m.group(2))
+                return 0.0
 
-                # Fallback: if basic salary not found, use gross or net pay as salary_income
-                if data_collected["salary_income"] == 0:
-                    fallback_salary = _find_amount(extracted_data, ["gross_salary", "gross pay", "gross", "total earnings"]) or data_collected.get("net_pay", 0)
-                    if fallback_salary and fallback_salary > 0:
-                        data_collected["salary_income"] = fallback_salary
+            # Extract income components into structured format (robust)
+            data_collected = {
+                "salary_income": _find_amount(extracted_data, [
+                    "basic_salary", "basic", "basic pay", "basic salary", "basic_salary"
+                ]),
+                "hra": _find_amount(extracted_data, [
+                    "hra", "house rent allowance", "house rent", "h r a"
+                ]),
+                "conveyance": _find_amount(extracted_data, [
+                    "conveyance", "conveyance allowance", "conveyance allowance"
+                ]),
+                "medical_allowance": _find_amount(extracted_data, [
+                    "medical", "medical allowance", "med allowance"
+                ]),
+                "education_allowance": _find_amount(extracted_data, [
+                    "education", "education allowance", "edu allowance"
+                ]),
+                "special_allowance": _find_amount(extracted_data, [
+                    "special", "special allowance", "special al"
+                ]),
+                "net_pay": _find_amount(extracted_data, [
+                    "net_pay", "net pay", "net salary", "take home", "take_home", "take-home"
+                ]),
+                "allowances": extracted_data.get("allowances", {}),
+                "tax_deducted": _find_amount(extracted_data, [
+                    "tax_deducted", "tds", "total tax deducted", "income tax deducted"
+                ]),
+                "epf": _find_amount(extracted_data, [
+                    "epf", "employee provident fund", "epf contribution", "pf", "provident fund"
+                ]),
+                "professional_tax": _find_amount(extracted_data, ["professional_tax", "pt", "professional tax"]),
+                "employee_name": extracted_data.get("employee_name", extracted_data.get("Employee Name", "")),
+                "pay_period": extracted_data.get("pay_period", extracted_data.get("pay_period", ""))
+            }
 
-                # Log the raw extraction and final values for debugging
-                try:
-                    logger.info(f"Payslip extracted_data keys: {list(extracted_data.keys())}")
-                    raw_preview = (extracted_data.get('raw_text') or '')[:1200]
-                    if raw_preview:
-                        logger.debug(f"Payslip raw_text preview: {raw_preview}")
-                    logger.info(f"Payslip final data_collected: {data_collected}")
-                except Exception:
-                    logger.exception("Error logging payslip extraction details")
+            # Fallback: if basic salary not found, use gross or net pay as salary_income
+            if data_collected["salary_income"] == 0:
+                fallback_salary = _find_amount(extracted_data, ["gross_salary", "gross pay", "gross", "total earnings"]) or data_collected.get("net_pay", 0)
+                if fallback_salary and fallback_salary > 0:
+                    data_collected["salary_income"] = fallback_salary
+
+            # Log the raw extraction and final values for debugging
+            try:
+                logger.info(f"Payslip extracted_data keys: {list(extracted_data.keys())}")
+                raw_preview = (extracted_data.get('raw_text') or '')[:1200]
+                if raw_preview:
+                    logger.debug(f"Payslip raw_text preview: {raw_preview}")
+                logger.info(f"Payslip final data_collected: {data_collected}")
+            except Exception:
+                logger.exception("Error logging payslip extraction details")
             
             logger.info(f"Payslip analysis successful. Confidence: {confidence}")
             
