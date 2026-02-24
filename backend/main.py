@@ -16,6 +16,10 @@ import json
 import logging
 import re
 from pathlib import Path
+import io
+import pdfplumber
+import pytesseract
+from PIL import Image
 
 # Load environment variables
 load_dotenv()
@@ -70,6 +74,16 @@ def _append_extraction_log(record: dict):
     except Exception:
         logger.exception("Failed to write extraction log")
 
+
+def _mask_sensitive_info(text: str) -> str:
+    """Mask PII patterns (PAN, UAN) in raw text before sending to AI."""
+    if not text:
+        return ""
+    # Mask PAN (5 letters, 4 digits, 1 letter)
+    text = re.sub(r'[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}', '<MASKED_PAN>', text)
+    # Mask UAN (12 digits)
+    text = re.sub(r'\b\d{12}\b', '<MASKED_UAN>', text)
+    return text
 
 def _mask_pan_value(val: str) -> str:
     """Mask PAN-like strings leaving only last 4 characters visible.
@@ -1016,17 +1030,29 @@ async def upload_payslip(file: UploadFile = File(...)):
         if file_ext not in ['pdf', 'png', 'jpg', 'jpeg']:
             return PayslipAnalysisResponse(
                 success=False,
-                message=f"Unsupported file format. Please upload PDF or image (PNG/JPG)"
+                message=f"For secure local processing, please upload PDF or Image files (PNG/JPG)."
             )
         
         try:
-            # Convert file to base64 for Gemini Vision API
-            import base64
-            file_base64 = base64.b64encode(content).decode('utf-8')
+            # Extract text locally
+            raw_text = ""
+            if file_ext == 'pdf':
+                with pdfplumber.open(io.BytesIO(content)) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            raw_text += text + "\n"
+            else:
+                # Use OCR for images (PNG/JPG)
+                image = Image.open(io.BytesIO(content))
+                raw_text = pytesseract.image_to_string(image)
             
-            # Prepare the analysis prompt
-            analysis_prompt = """
-            Please analyze this payslip and extract the following information:
+            # Mask sensitive data
+            safe_text = _mask_sensitive_info(raw_text)
+            
+            # Prepare the analysis prompt with sanitized text
+            analysis_prompt = f"""
+            Please analyze this payslip text and extract the following information:
             1. Salary components:
                - Basic salary
                - House Rent Allowance (HRA)
@@ -1051,23 +1077,13 @@ async def upload_payslip(file: UploadFile = File(...)):
             Please provide the response in JSON format with keys matching the above structure.
             If any field is not visible, mark it as null.
             Include a confidence score (0-1) for the accuracy of extraction.
+
+            PAYSLIP TEXT DATA:
+            {safe_text}
             """
             
-            # Use Gemini Vision API to analyze payslip
-            import base64
-            
-            # Determine MIME type
-            mime_type = f"image/{file_ext}" if file_ext in ['png', 'jpg', 'jpeg'] else "application/pdf"
-            
-            # Create the vision request
-            vision_model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            file_part = {
-                'mime_type': mime_type,
-                'data': file_base64
-            }
-            
-            response = vision_model.generate_content([analysis_prompt, file_part])
+            # Use Gemini Text API (using the global model instance)
+            response = model.generate_content(analysis_prompt)
             
             # Parse the response
             logger.info(f"Gemini vision analysis completed for {file.filename}")
@@ -1323,17 +1339,29 @@ async def upload_form16(file: UploadFile = File(...)):
         if file_ext not in ['pdf', 'png', 'jpg', 'jpeg']:
             return Form16AnalysisResponse(
                 success=False,
-                message=f"Unsupported file format. Please upload PDF or image (PNG/JPG)"
+                message=f"For secure local processing, please upload PDF or Image files (PNG/JPG)."
             )
         
         try:
-            # Convert file to base64 for Gemini Vision API
-            import base64
-            file_base64 = base64.b64encode(content).decode('utf-8')
+            # Extract text locally
+            raw_text = ""
+            if file_ext == 'pdf':
+                with pdfplumber.open(io.BytesIO(content)) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            raw_text += text + "\n"
+            else:
+                # Use OCR for images (PNG/JPG)
+                image = Image.open(io.BytesIO(content))
+                raw_text = pytesseract.image_to_string(image)
             
-            # Comprehensive Form 16 analysis prompt
-            analysis_prompt = """
-            Please carefully analyze this Form 16 document and extract ALL the following information:
+            # Mask sensitive data
+            safe_text = _mask_sensitive_info(raw_text)
+            
+            # Comprehensive Form 16 analysis prompt with sanitized text
+            analysis_prompt = f"""
+            Please carefully analyze this Form 16 text data and extract ALL the following information:
             
             SECTION A - EMPLOYEE DETAILS:
             1. Full Name of Employee
@@ -1419,20 +1447,13 @@ async def upload_form16(file: UploadFile = File(...)):
                 "confidence_score": 0.0 to 1.0,
                 "notes": "any important notes or missing fields"
             }
+
+            FORM 16 TEXT DATA:
+            {safe_text}
             """
             
-            # Determine MIME type
-            mime_type = f"image/{file_ext}" if file_ext in ['png', 'jpg', 'jpeg'] else "application/pdf"
-            
-            # Use Gemini Vision API to analyze Form 16
-            vision_model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            file_part = {
-                'mime_type': mime_type,
-                'data': file_base64
-            }
-            
-            response = vision_model.generate_content([analysis_prompt, file_part])
+            # Use Gemini Text API
+            response = model.generate_content(analysis_prompt)
             
             # Parse the response
             logger.info(f"Gemini vision analysis completed for Form 16: {file.filename}")
