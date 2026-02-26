@@ -3,7 +3,7 @@ ITR Tax Filing & Advisory Chatbot - Main Application
 Complete CA-like tax advisory system for Indian Income Tax Returns
 """
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -16,10 +16,6 @@ import json
 import logging
 import re
 from pathlib import Path
-import io
-import pdfplumber
-import pytesseract
-from PIL import Image
 
 # Load environment variables
 load_dotenv()
@@ -39,71 +35,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Ensure extractions log file exists so reads won't fail
-try:
-    (log_dir / "extractions.log").touch(exist_ok=True)
-except Exception:
-    # If touch fails, keep going; _append_extraction_log will attempt again
-    logger.exception("Could not create extractions.log at startup")
-
-
-# Helper: append structured extraction logs to a file
-def _append_extraction_log(record: dict):
-    try:
-        log_file = log_dir / "extractions.log"
-        # ensure directory exists
-        log_dir.mkdir(exist_ok=True)
-        # ensure file exists
-        try:
-            log_file.touch(exist_ok=True)
-        except Exception:
-            logger.debug("Could not touch extractions.log; will attempt to open directly")
-        # Sanitize record (mask PANs) before persisting/logging
-        safe_record = _sanitize_record_for_logging(record)
-
-        # append structured JSON line
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(safe_record, ensure_ascii=False) + "\n")
-
-        # Also write a compact JSON line into the main service log for immediate visibility
-        try:
-            logger.info("Extraction record appended: %s", json.dumps(safe_record, ensure_ascii=False))
-        except Exception:
-            logger.info("Extraction record appended for file: %s", safe_record.get("filename"))
-    except Exception:
-        logger.exception("Failed to write extraction log")
-
-
-def _mask_sensitive_info(text: str) -> str:
-    """Mask PII patterns (PAN, UAN) in raw text before sending to AI."""
-    if not text:
-        return ""
-    # Mask PAN (5 letters, 4 digits, 1 letter)
-    text = re.sub(r'[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}', '<MASKED_PAN>', text)
-    # Mask UAN (12 digits)
-    text = re.sub(r'\b\d{12}\b', '<MASKED_UAN>', text)
-    return text
-
-def _mask_pan_value(val: str) -> str:
-    """Mask PAN-like strings leaving only last 4 characters visible.
-    PAN format (India) is 10 chars: 5 letters + 4 digits + 1 letter, but we'll mask any alphanumeric token of length >=6 containing digits.
-    """
-    if not isinstance(val, str):
-        return val
-    # Simple PAN regex: 5 letters, 4 digits, 1 letter (case-insensitive)
-    pan_match = re.search(r"([A-Za-z]{5}[0-9]{4}[A-Za-z])", val)
-    if pan_match:
-        pan = pan_match.group(1)
-        return val.replace(pan, 'X' * (len(pan) - 4) + pan[-4:])
-
-    # fallback: mask tokens that look like sensitive identifiers (>=6 alnum chars with digits)
-    token_match = re.search(r"([A-Za-z0-9]{6,})", val)
-    if token_match and re.search(r"\d", token_match.group(1)):
-        t = token_match.group(1)
-        return val.replace(t, 'X' * (len(t) - 4) + t[-4:])
-
-    return val
 
 
 def _sanitize_obj(obj):
@@ -129,25 +60,25 @@ def _sanitize_obj(obj):
         return obj
 
 
-def _sanitize_record_for_logging(record: dict) -> dict:
-    """Return a sanitized copy of record suitable for logs (masks PANs and raw AI responses optionally).
-    Keeps structure but masks PAN values and truncates long raw_text_preview for safety.
+def _mask_pan_value(val: str) -> str:
+    """Mask PAN-like strings leaving only last 4 characters visible.
+    PAN format (India) is 10 chars: 5 letters + 4 digits + 1 letter, but we'll mask any alphanumeric token of length >=6 containing digits.
     """
-    try:
-        safe = dict(record)
-        # Sanitize nested extracted_
-        # and form16 payloads
-        if 'extracted_data' in safe and isinstance(safe['extracted_data'], dict):
-            safe['extracted_data'] = _sanitize_obj(safe['extracted_data'])
-        if 'data_collected' in safe and isinstance(safe['data_collected'], dict):
-            safe['data_collected'] = _sanitize_obj(safe['data_collected'])
-        # Truncate raw text preview to 1000 chars to avoid sensitive leakage
-        if 'raw_text_preview' in safe and isinstance(safe['raw_text_preview'], str):
-            safe['raw_text_preview'] = safe['raw_text_preview'][:1000]
-        return safe
-    except Exception:
-        logger.exception('Error sanitizing extraction record')
-        return record
+    if not isinstance(val, str):
+        return val
+    # Simple PAN regex: 5 letters, 4 digits, 1 letter (case-insensitive)
+    pan_match = re.search(r"([A-Za-z]{5}[0-9]{4}[A-Za-z])", val)
+    if pan_match:
+        pan = pan_match.group(1)
+        return val.replace(pan, 'X' * (len(pan) - 4) + pan[-4:])
+
+    # fallback: mask tokens that look like sensitive identifiers (>=6 alnum chars with digits)
+    token_match = re.search(r"([A-Za-z0-9]{6,})", val)
+    if token_match and re.search(r"\d", token_match.group(1)):
+        t = token_match.group(1)
+        return val.replace(t, 'X' * (len(t) - 4) + t[-4:])
+
+    return val
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -221,32 +152,10 @@ class DeductionDetails(BaseModel):
     home_loan_interest: Optional[float] = 0
 
 
-class Form16Data(BaseModel):
-    """Form 16 extracted data"""
-    employee_name: Optional[str] = None
-    pan: Optional[str] = None
-    financial_year: Optional[str] = "2024-25"
-    gross_salary: Optional[float] = 0
-    basic_salary: Optional[float] = 0
-    hra: Optional[float] = 0
-    dearness_allowance: Optional[float] = 0
-    other_allowances: Optional[float] = 0
-    total_salary: Optional[float] = 0
-    epf_contribution: Optional[float] = 0
-    tds_deducted: Optional[float] = 0
-    income_tax_deducted: Optional[float] = 0
-    employer_name: Optional[str] = None
-    employer_tan: Optional[str] = None
-    form_16_part_a: Optional[Dict[str, Any]] = {}
-    form_16_part_b: Optional[Dict[str, Any]] = {}
-    extraction_confidence: Optional[float] = 0.0
-
-
 class ChatMessage(BaseModel):
     session_id: str
     message: str
     context: Optional[Dict[str, Any]] = {}
-    form16_data: Optional[Form16Data] = None
 
 
 class ChatResponse(BaseModel):
@@ -277,24 +186,6 @@ class ITRFormRecommendation(BaseModel):
     recommended_form: str
     reason: str
     alternative_forms: List[str]
-
-
-class PayslipAnalysisResponse(BaseModel):
-    """Response from payslip analysis"""
-    success: bool
-    message: str
-    extracted_data: Optional[Dict[str, Any]] = {}
-    confidence: Optional[float] = 0.0  # Confidence score 0-1
-    data_collected: Optional[Dict[str, Any]] = {}
-
-
-class Form16AnalysisResponse(BaseModel):
-    """Response from Form 16 analysis"""
-    success: bool
-    message: str
-    extracted_data: Optional[Form16Data] = None
-    confidence: Optional[float] = 0.0  # Confidence score 0-1
-    warnings: Optional[List[str]] = []
 
 
 # ==================== Tax Calculation Engine ====================
@@ -604,18 +495,12 @@ IMPORTANT: Always include a disclaimer that this is guidance and users should ve
 
 Respond conversationally but professionally."""
     
-    async def chat(self, session_id: str, user_message: str, context: Dict = None, form16_data: Form16Data = None) -> ChatResponse:
+    async def chat(self, session_id: str, user_message: str, context: Dict = None) -> ChatResponse:
         """Process chat message and return response"""
         
         # Get or create conversation history
         if session_id not in conversations:
             conversations[session_id] = []
-        
-        # Store Form 16 data in session if provided
-        if form16_data and session_id not in user_profiles:
-            user_profiles[session_id] = {}
-        if form16_data:
-            user_profiles[session_id]["form16_data"] = form16_data
         
         # Add user message to history
         conversations[session_id].append({
@@ -623,37 +508,8 @@ Respond conversationally but professionally."""
             "content": user_message
         })
         
-        # Build context-aware prompt with Form 16 information
+        # Build context-aware prompt
         context_str = ""
-        form16_context = ""
-        
-        if form16_data:
-            form16_context = f"""
-
-=== IMPORTANT: Form 16 Data Already Extracted ===
-The user has uploaded Form 16. Use this information and DO NOT ask about these details:
-- Employee Name: {form16_data.employee_name}
-- PAN: {form16_data.pan}
-- Gross Salary: ₹{form16_data.gross_salary:,.0f}
-- Basic Salary: ₹{form16_data.basic_salary:,.0f}
-- HRA: ₹{form16_data.hra:,.0f}
-- Dearness Allowance: ₹{form16_data.dearness_allowance:,.0f}
-- Other Allowances: ₹{form16_data.other_allowances:,.0f}
-- Total Salary: ₹{form16_data.total_salary:,.0f}
-- EPF Contribution: ₹{form16_data.epf_contribution:,.0f}
-- TDS Deducted: ₹{form16_data.tds_deducted:,.0f}
-- Income Tax Deducted: ₹{form16_data.income_tax_deducted:,.0f}
-- Employer: {form16_data.employer_name}
-- Financial Year: {form16_data.financial_year}
-- Extraction Confidence: {form16_data.extraction_confidence:.0%}
-
-Focus on:
-1. Confirming if the extracted details are correct
-2. Asking about OTHER income sources (if any)
-3. Asking about deductions NOT visible in Form 16
-4. Tax regime recommendation
-5. Remaining questions for ITR filing
-==================================================="""
         
         if context:
             context_str = f"\n\nCurrent user context:\n{json.dumps(context, indent=2)}"
@@ -664,7 +520,7 @@ Focus on:
             for msg in conversations[session_id][-10:]  # Last 10 messages
         ])
         
-        full_prompt = f"""{self.system_prompt}{form16_context}{context_str}
+        full_prompt = f"""{self.system_prompt}{context_str}
 
 Conversation so far:
 {chat_history}
@@ -778,8 +634,7 @@ async def chat_endpoint(chat_request: ChatMessage):
         response = await chatbot.chat(
             session_id=chat_request.session_id,
             user_message=chat_request.message,
-            context=chat_request.context,
-            form16_data=chat_request.form16_data
+            context=chat_request.context
         )
         return response
     except Exception as e:
@@ -907,78 +762,6 @@ async def get_deductions_info():
     }
 
 
-@app.get("/api/extractions")
-async def get_extractions(tail: int = 50):
-    """Return last N extraction records from logs/extractions.log"""
-    try:
-        log_file = log_dir / "extractions.log"
-        if not log_file.exists():
-            return []
-
-        results = []
-        with open(log_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    results.append(json.loads(line))
-                except Exception:
-                    # skip malformed lines
-                    continue
-
-        return results[-tail:]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/extractions/purge")
-async def purge_extractions(older_than_days: int = 30):
-    """Purge extraction records older than `older_than_days` from extractions.log.
-    WARNING: This rewrites the log file and cannot be undone. Requires caution in production.
-    """
-    try:
-        log_file = log_dir / "extractions.log"
-        if not log_file.exists():
-            return {"purged": 0, "message": "No extraction log present"}
-
-        cutoff = _dt.utcnow() - timedelta(days=older_than_days)
-        kept = []
-        purged_count = 0
-        with open(log_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    ts = obj.get("timestamp")
-                    if ts:
-                        try:
-                            obj_dt = datetime.fromisoformat(ts)
-                        except Exception:
-                            obj_dt = None
-                    else:
-                        obj_dt = None
-
-                    if obj_dt and obj_dt < cutoff:
-                        purged_count += 1
-                        continue
-                    kept.append(line)
-                except Exception:
-                    # Keep malformed lines to avoid accidental loss
-                    kept.append(line)
-
-        # Rewrite file with kept lines
-        with open(log_file, "w", encoding="utf-8") as f:
-            for l in kept:
-                f.write(l + "\n")
-
-        return {"purged": purged_count, "kept": len(kept)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/full-forms")
 async def get_full_forms():
     """Get full forms of tax abbreviations"""
@@ -1003,602 +786,6 @@ async def get_full_forms():
         "STCG": "Short Term Capital Gains",
         "CBDT": "Central Board of Direct Taxes"
     }
-
-
-@app.post("/api/upload-payslip", response_model=PayslipAnalysisResponse)
-async def upload_payslip(file: UploadFile = File(...)):
-    """
-    Upload and analyze payslip (PDF/Image)
-    Extracts income components and tax details
-    """
-    try:
-        if not file.filename:
-            return PayslipAnalysisResponse(
-                success=False,
-                message="No file provided"
-            )
-        
-        # Log file upload
-        logger.info(f"Payslip upload received: {file.filename} (Size: {file.size} bytes)")
-        
-        # Read file content
-        content = await file.read()
-        
-        # Check file type
-        file_ext = file.filename.split('.')[-1].lower()
-        
-        if file_ext not in ['pdf', 'png', 'jpg', 'jpeg']:
-            return PayslipAnalysisResponse(
-                success=False,
-                message=f"For secure local processing, please upload PDF or Image files (PNG/JPG)."
-            )
-        
-        try:
-            # Extract text locally
-            raw_text = ""
-            if file_ext == 'pdf':
-                with pdfplumber.open(io.BytesIO(content)) as pdf:
-                    for page in pdf.pages:
-                        text = page.extract_text()
-                        if text:
-                            raw_text += text + "\n"
-            else:
-                # Use OCR for images (PNG/JPG)
-                image = Image.open(io.BytesIO(content))
-                raw_text = pytesseract.image_to_string(image)
-            
-            # Mask sensitive data
-            safe_text = _mask_sensitive_info(raw_text)
-            
-            # Prepare the analysis prompt with sanitized text
-            analysis_prompt = f"""
-            Please analyze this payslip text and extract the following information:
-            1. Salary components:
-               - Basic salary
-               - House Rent Allowance (HRA)
-               - Dearness Allowance (DA)
-               - Conveyance allowance
-               - Medical allowance
-               - Other allowances
-            2. Deductions:
-               - Employee Provident Fund (EPF)
-               - Income Tax / TDS
-               - Other deductions
-            3. Employee details:
-               - Employee name
-               - Designation
-               - Department
-               - PAN (if visible)
-            4. Tax information:
-               - Total TDS deducted
-               - Tax regime (if mentioned)
-            5. Pay period and payment details
-            
-            Please provide the response in JSON format with keys matching the above structure.
-            If any field is not visible, mark it as null.
-            Include a confidence score (0-1) for the accuracy of extraction.
-
-            PAYSLIP TEXT DATA:
-            {safe_text}
-            """
-            
-            # Use Gemini Text API (using the global model instance)
-            response = model.generate_content(analysis_prompt)
-            
-            # Parse the response
-            logger.info(f"Gemini vision analysis completed for {file.filename}")
-            
-            # Try to extract JSON from response
-            response_text = response.text
-            
-            # Parse JSON from response
-            import re
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            
-            extracted_data = {}
-            confidence = 0.8  # Default confidence
-            
-            if json_match:
-                try:
-                    extracted_data = json.loads(json_match.group())
-                    confidence = extracted_data.pop('confidence', 0.8)
-                except json.JSONDecodeError:
-                    extracted_data = {"raw_text": response_text}
-                    confidence = 0.5
-            else:
-                extracted_data = {"raw_text": response_text}
-                confidence = 0.5
-
-            # Extract income components into structured format
-            # Ensure this logic is NOT indented inside the else block
-            # Helper: robust number parsing and flexible key matching
-            def _parse_number(val):
-                if val is None:
-                    return 0.0
-                if isinstance(val, (int, float)):
-                    return float(val)
-                s = str(val)
-                # remove common currency symbols and whitespace
-                s = re.sub(r'[₹$,\s]', '', s)
-                # handle parentheses as negative
-                s = s.replace('(', '-').replace(')', '')
-                try:
-                    return float(s)
-                except Exception:
-                    m = re.search(r'-?\d[\d,\.]*', str(val))
-                    if m:
-                        try:
-                            return float(m.group().replace(',', ''))
-                        except Exception:
-                            return 0.0
-                    return 0.0
-            
-            # Helper: recursive search for values in nested JSON
-            def _find_value_recursive(data, candidates):
-                if not isinstance(data, dict):
-                    return None
-                # Check current level keys
-                for k, v in data.items():
-                    if isinstance(k, str):
-                        k_lower = k.lower()
-                        for cand in candidates:
-                            if cand.lower() in k_lower:
-                                if not isinstance(v, dict):
-                                    return v
-                # Recurse into nested dicts
-                for v in data.values():
-                    if isinstance(v, dict):
-                        res = _find_value_recursive(v, candidates)
-                        if res is not None:
-                            return res
-                return None
-
-            def _find_amount(data, candidates):
-                val = _find_value_recursive(data, candidates)
-                if val is not None:
-                    return _parse_number(val)
-                # try raw text
-                raw = data.get('raw_text') or data.get('text') or ''
-                if raw:
-                    pattern = r'(' + '|'.join([re.escape(c) for c in candidates]) + r')[^\d\n\r]{0,30}([₹₹]?\s*[\d,]+\.?\d*)'
-                    m = re.search(pattern, raw, re.IGNORECASE)
-                    if m:
-                        return _parse_number(m.group(2))
-                return 0.0
-
-            def _find_string(data, candidates):
-                val = _find_value_recursive(data, candidates)
-                if val and isinstance(val, str):
-                    return val.strip()
-                return ""
-
-            # Extract income components into structured format (robust)
-            data_collected = {
-                "salary_income": _find_amount(extracted_data, [
-                    "basic_salary", "basic", "basic pay", "basic salary", "basic_salary"
-                ]),
-                "hra": _find_amount(extracted_data, [
-                    "hra", "house rent allowance", "house rent", "h r a"
-                ]),
-                "conveyance": _find_amount(extracted_data, [
-                    "conveyance", "conveyance allowance", "conveyance allowance"
-                ]),
-                "medical_allowance": _find_amount(extracted_data, [
-                    "medical", "medical allowance", "med allowance"
-                ]),
-                "education_allowance": _find_amount(extracted_data, [
-                    "education", "education allowance", "edu allowance"
-                ]),
-                "special_allowance": _find_amount(extracted_data, [
-                    "special", "special allowance", "special al"
-                ]),
-                "net_pay": _find_amount(extracted_data, [
-                    "net_pay", "net pay", "net salary", "take home", "take_home", "take-home"
-                ]),
-                "allowances": extracted_data.get("allowances", {}),
-                "tax_deducted": _find_amount(extracted_data, [
-                    "tax_deducted", "tds", "total tax deducted", "income tax deducted"
-                ]),
-                "epf": _find_amount(extracted_data, [
-                    "epf", "employee provident fund", "epf contribution", "pf", "provident fund"
-                ]),
-                "professional_tax": _find_amount(extracted_data, ["professional_tax", "pt", "professional tax"]),
-                "employee_name": _find_string(extracted_data, ["employee_name", "employee name", "name of employee"]),
-                "pay_period": _find_string(extracted_data, ["pay_period", "pay period", "month", "period"])
-            }
-
-            # Fallback: if basic salary not found, use gross or net pay as salary_income
-            if data_collected["salary_income"] == 0:
-                fallback_salary = _find_amount(extracted_data, ["gross_salary", "gross pay", "gross", "total earnings"]) or data_collected.get("net_pay", 0)
-                if fallback_salary and fallback_salary > 0:
-                    data_collected["salary_income"] = fallback_salary
-
-            # Generate detailed summary message to show all extracted data
-            details = []
-
-            # Handle PAN separately for masking and add it to data_collected
-            pan_val = _find_string(extracted_data, ["pan", "pan number", "pan_no"])
-            if pan_val:
-                masked_pan = _mask_pan_value(pan_val)
-                data_collected["pan"] = masked_pan
-
-            # Define display order and labels for a clean presentation
-            display_order_and_labels = [
-                ("employee_name", "Employee"),
-                ("pan", "PAN"),
-                ("pay_period", "Period"),
-                ("salary_income", "Basic Salary"),
-                ("hra", "HRA"),
-                ("conveyance", "Conveyance"),
-                ("medical_allowance", "Medical Allowance"),
-                ("education_allowance", "Education Allowance"),
-                ("special_allowance", "Special Allowance"),
-                ("epf", "EPF"),
-                ("professional_tax", "Professional Tax"),
-                ("tax_deducted", "TDS"),
-                ("net_pay", "Net Pay"),
-            ]
-
-            processed_keys = set()
-            # Add fields from the ordered list first
-            for key, label in display_order_and_labels:
-                value = data_collected.get(key)
-                if value:
-                    if isinstance(value, (int, float)) and value > 0:
-                        details.append(f"{label}: ₹{value:,.0f}")
-                    elif isinstance(value, str) and value.strip():
-                        details.append(f"{label}: {value}")
-                    processed_keys.add(key)
-
-            # Add any other remaining fields from data_collected
-            for key, value in data_collected.items():
-                if key not in processed_keys and key != "allowances" and value:
-                    label = key.replace('_', ' ').title()
-                    if isinstance(value, (int, float)) and value > 0:
-                        details.append(f"{label}: ₹{value:,.0f}")
-                    elif isinstance(value, str) and value.strip():
-                        details.append(f"{label}: {value}")
-            
-            success_msg = f"Payslip analyzed. Found: {', '.join(details)}" if details else f"Payslip analyzed successfully. Confidence: {confidence:.0%}"
-
-            # Log the final extracted data for debugging
-            logger.info(f"{success_msg}")
-            logger.info(f"Payslip extracted data: {data_collected}")
-
-            # Persist extraction log
-            try:
-                record = {
-                    "timestamp": _dt.utcnow().isoformat(),
-                    "type": "payslip",
-                    "filename": file.filename,
-                    "extracted_data_keys": list(extracted_data.keys()),
-                    "extracted_data": extracted_data,
-                    "data_collected": data_collected,
-                    "confidence": confidence,
-                    "message": success_msg,
-                    "raw_text_preview": (response_text or '')[:2000]
-                }
-                _append_extraction_log(record)
-            except Exception:
-                logger.exception("Failed to persist payslip extraction log")
-
-            # Sanitize data for UI response
-            safe_extracted_data = _sanitize_obj(extracted_data)
-            safe_data_collected = _sanitize_obj(data_collected)
-
-            return PayslipAnalysisResponse(
-                success=True,
-                message=success_msg,
-                extracted_data=safe_extracted_data,
-                confidence=confidence,
-                data_collected=safe_data_collected
-            )
-            
-        except Exception as e:
-            logger.error(f"Error analyzing payslip with Gemini: {str(e)}", exc_info=True)
-            return PayslipAnalysisResponse(
-                success=False,
-                message=f"Could not analyze payslip: {str(e)}. Please enter details manually."
-            )
-        
-    except Exception as e:
-        logger.error(f"Error in payslip upload endpoint: {str(e)}", exc_info=True)
-        return PayslipAnalysisResponse(
-            success=False,
-            message=f"Error processing file: {str(e)}"
-        )
-
-
-@app.post("/api/upload-form16", response_model=Form16AnalysisResponse)
-async def upload_form16(file: UploadFile = File(...)):
-    """
-    Upload and analyze Form 16 (PDF/Image)
-    Extracts all salary and tax information from Form 16
-    Form 16 is critical for salaried individuals as it contains:
-    - Complete salary breakdown (basic, HRA, DA, allowances)
-    - TDS deducted details
-    - Employer information
-    - PAN and other personal details
-    """
-    try:
-        if not file.filename:
-            return Form16AnalysisResponse(
-                success=False,
-                message="No file provided"
-            )
-        
-        # Log file upload
-        logger.info(f"Form 16 upload received: {file.filename} (Size: {file.size} bytes)")
-        
-        # Read file content
-        content = await file.read()
-        
-        # Check file type
-        file_ext = file.filename.split('.')[-1].lower()
-        
-        if file_ext not in ['pdf', 'png', 'jpg', 'jpeg']:
-            return Form16AnalysisResponse(
-                success=False,
-                message=f"For secure local processing, please upload PDF or Image files (PNG/JPG)."
-            )
-        
-        try:
-            # Extract text locally
-            raw_text = ""
-            if file_ext == 'pdf':
-                with pdfplumber.open(io.BytesIO(content)) as pdf:
-                    for page in pdf.pages:
-                        text = page.extract_text()
-                        if text:
-                            raw_text += text + "\n"
-            else:
-                # Use OCR for images (PNG/JPG)
-                image = Image.open(io.BytesIO(content))
-                raw_text = pytesseract.image_to_string(image)
-            
-            # Mask sensitive data
-            safe_text = _mask_sensitive_info(raw_text)
-            
-            # Comprehensive Form 16 analysis prompt with sanitized text
-            analysis_prompt = f"""
-            Please carefully analyze this Form 16 text data and extract ALL the following information:
-            
-            SECTION A - EMPLOYEE DETAILS:
-            1. Full Name of Employee
-            2. PAN (Permanent Account Number)
-            3. Date of Birth
-            4. Financial Year (e.g., 2024-25)
-            5. Assessment Year
-            
-            SECTION B - EMPLOYER DETAILS:
-            1. Employer Name
-            2. TAN (Tax Account Number)
-            3. Address
-            
-            SECTION C - SALARY DETAILS (Annual):
-            1. Basic Salary
-            2. House Rent Allowance (HRA)
-            3. Dearness Allowance (DA)
-            4. Conveyance Allowance
-            5. Medical Allowance
-            6. Bonus
-            7. Other Allowances/Perquisites
-            8. Gross Salary (Total of all above)
-            
-            SECTION D - DEDUCTIONS:
-            1. Employee Provident Fund (EPF) / Contrib to Superannuation
-            2. Professional Tax
-            3. Income Tax
-            4. Other Deductions
-            5. Total Deductions
-            
-            SECTION E - TAX INFORMATION:
-            1. Total Income
-            2. Total Tax Deducted
-            3. Relief under Section 89(1)
-            4. Net Tax Payable
-            5. Refund Due (if any)
-            
-            SECTION F - CERTIFICATION:
-            1. Date of Issuance
-            2. Employer's Signature/authorized person
-            
-            Additional Notes:
-            - If any field is not visible in the document, explicitly state it as "Not visible"
-            - Provide only ANNUAL amounts for salary components
-            - Extract EXACT amounts as shown in the form
-            - If Form 16 Part B is visible, also extract deductions claimed (Section 80C, 80D, etc.)
-            
-            Respond ONLY in valid JSON format with these exact keys:
-            {
-                "employee_name": "value",
-                "pan": "value",
-                "date_of_birth": "value",
-                "financial_year": "value",
-                "assessment_year": "value",
-                "employer_name": "value",
-                "employer_tan": "value",
-                "basic_salary": numeric_value,
-                "hra": numeric_value,
-                "dearness_allowance": numeric_value,
-                "conveyance_allowance": numeric_value,
-                "medical_allowance": numeric_value,
-                "bonus": numeric_value,
-                "other_allowances": numeric_value,
-                "gross_salary": numeric_value,
-                "epf_contribution": numeric_value,
-                "professional_tax": numeric_value,
-                "income_tax_deducted": numeric_value,
-                "other_deductions": numeric_value,
-                "total_deductions": numeric_value,
-                "total_income": numeric_value,
-                "total_tax_deducted": numeric_value,
-                "relief_89_1": numeric_value,
-                "net_tax_payable": numeric_value,
-                "refund_due": numeric_value,
-                "form16_date": "value",
-                "part_b_deductions": {
-                    "section_80c": numeric_value,
-                    "section_80d": numeric_value,
-                    "section_80e": numeric_value,
-                    "section_80g": numeric_value,
-                    "other_deductions": numeric_value
-                },
-                "confidence_score": 0.0 to 1.0,
-                "notes": "any important notes or missing fields"
-            }
-
-            FORM 16 TEXT DATA:
-            {safe_text}
-            """
-            
-            # Use Gemini Text API
-            response = model.generate_content(analysis_prompt)
-            
-            # Parse the response
-            logger.info(f"Gemini vision analysis completed for Form 16: {file.filename}")
-            
-            # Try to extract JSON from response
-            response_text = response.text
-            
-            # Parse JSON from response with better error handling
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', response_text, re.DOTALL)
-            
-            extracted_form16 = None
-            confidence = 0.5
-            warnings = []
-            
-            if json_match:
-                try:
-                    json_data = json.loads(json_match.group())
-                    confidence = json_data.pop('confidence_score', 0.7)
-                    notes = json_data.pop('notes', "")
-                    
-                    # Create Form16Data object
-                    extracted_form16 = Form16Data(
-                        employee_name=json_data.get("employee_name"),
-                        pan=json_data.get("pan"),
-                        financial_year=json_data.get("financial_year", "2024-25"),
-                        gross_salary=float(json_data.get("gross_salary", 0)),
-                        basic_salary=float(json_data.get("basic_salary", 0)),
-                        hra=float(json_data.get("hra", 0)),
-                        dearness_allowance=float(json_data.get("dearness_allowance", 0)),
-                        other_allowances=float(json_data.get("other_allowances", 0)),
-                        total_salary=float(json_data.get("gross_salary", 0)),
-                        epf_contribution=float(json_data.get("epf_contribution", 0)),
-                        tds_deducted=float(json_data.get("total_tax_deducted", 0)),
-                        income_tax_deducted=float(json_data.get("income_tax_deducted", 0)),
-                        employer_name=json_data.get("employer_name"),
-                        employer_tan=json_data.get("employer_tan"),
-                        form_16_part_a=json_data,
-                        form_16_part_b=json_data.get("part_b_deductions", {}),
-                        extraction_confidence=confidence
-                    )
-                    
-                    # Add warnings if confidence is low or important fields missing
-                    if confidence < 0.7:
-                        warnings.append(f"Low confidence extraction ({confidence:.0%}). Please verify all details.")
-                    if not extracted_form16.pan:
-                        warnings.append("PAN not clearly extracted. Please verify.")
-                    if notes:
-                        warnings.append(f"Notes from analysis: {notes}")
-                    
-                    # Log before masking for UI
-                    logger.info(f"Form 16 analysis successful. Confidence: {confidence:.0%}")
-                    logger.info(f"Form 16 extracted data: {extracted_form16.dict()}")
-
-                    # Sanitize the entire object for the UI response
-                    extracted_form16 = Form16Data(**_sanitize_obj(extracted_form16.dict()))
-                    
-                    # Generate detailed summary for Form 16 to show all extracted data
-                    f16_details = []
-                    
-                    # Define display order and labels for Form16Data model
-                    f16_display_order_and_labels = [
-                        ("employee_name", "Employee"),
-                        ("pan", "PAN"),
-                        ("employer_name", "Employer"),
-                        ("employer_tan", "TAN"),
-                        ("financial_year", "FY"),
-                        ("gross_salary", "Gross Salary"),
-                        ("basic_salary", "Basic Salary"),
-                        ("hra", "HRA"),
-                        ("dearness_allowance", "DA"),
-                        ("other_allowances", "Other Allowances"),
-                        ("total_salary", "Total Salary"),
-                        ("epf_contribution", "EPF"),
-                        ("tds_deducted", "TDS Deducted"),
-                        ("income_tax_deducted", "Income Tax")
-                    ]
-
-                    # Iterate through the defined fields to ensure order and clarity
-                    for attr, label in f16_display_order_and_labels:
-                        value = getattr(extracted_form16, attr, None)
-                        if value: # Check for non-empty/non-zero values
-                            if isinstance(value, (int, float)):
-                                if value > 0:
-                                    f16_details.append(f"{label}: ₹{value:,.0f}")
-                            elif isinstance(value, str) and value.strip():
-                                f16_details.append(f"{label}: {value}")
-                            
-                    success_msg = f"Form 16 analyzed. Found: {', '.join(f16_details)}"
-                    if warnings:
-                        success_msg += f" ({len(warnings)} warnings)"
-
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parsing error: {str(e)}")
-                    warnings.append("Could not parse extracted data as JSON")
-                    confidence = 0.3
-            else:
-                warnings.append("Could not extract structured data from Form 16")
-                confidence = 0.2
-            
-            if not extracted_form16:
-                return Form16AnalysisResponse(
-                    success=False,
-                    message="Could not extract Form 16 data. Please ensure the image/PDF is clear and contains the complete form.",
-                    confidence=confidence,
-                    warnings=warnings
-                )
-
-            # Persist extraction log for Form 16
-            try:
-                record = {
-                    "timestamp": _dt.utcnow().isoformat(),
-                    "type": "form16",
-                    "filename": file.filename,
-                    "extracted_data": extracted_form16.dict() if hasattr(extracted_form16, 'dict') else {},
-                    "confidence": confidence,
-                    "warnings": warnings,
-                }
-                _append_extraction_log(record)
-            except Exception:
-                logger.exception("Failed to persist Form 16 extraction log")
-
-            return Form16AnalysisResponse(
-                success=True,
-                message=success_msg if 'success_msg' in locals() else f"Form 16 analyzed successfully. Confidence: {confidence:.0%}",
-                extracted_data=extracted_form16,
-                confidence=confidence,
-                warnings=warnings
-            )
-            
-        except Exception as e:
-            logger.error(f"Error analyzing Form 16 with Gemini: {str(e)}", exc_info=True)
-            return Form16AnalysisResponse(
-                success=False,
-                message=f"Could not analyze Form 16: {str(e)}. Please try again.",
-                warnings=[str(e)]
-            )
-        
-    except Exception as e:
-        logger.error(f"Error in Form 16 upload endpoint: {str(e)}", exc_info=True)
-        return Form16AnalysisResponse(
-            success=False,
-            message=f"Error processing file: {str(e)}",
-            warnings=[str(e)]
-        )
 
 
 if __name__ == "__main__":

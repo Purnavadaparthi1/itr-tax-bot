@@ -5,7 +5,6 @@ import {
   Trash2, 
   MessageSquare, 
   Calculator,
-  FileUp,
   Menu,
   X,
   Sparkles,
@@ -16,7 +15,6 @@ import { v4 as uuidv4 } from 'uuid';
 import ChatMessage, { TypingIndicator } from './components/ChatMessage';
 import SuggestionChips from './components/SuggestionChips';
 import TaxCalculator from './components/TaxCalculator';
-import PayslipUpload from './components/PayslipUpload';
 import InfoCards from './components/InfoCards';
 import { sendMessage, clearSession } from './utils/api';
 
@@ -32,10 +30,8 @@ function App() {
     "Calculate my tax"
   ]);
   const [showCalculator, setShowCalculator] = useState(false);
-  const [showPayslipUpload, setShowPayslipUpload] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [userContext, setUserContext] = useState({});
-  const [form16Data, setForm16Data] = useState(null);
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -67,8 +63,7 @@ function App() {
     setIsTyping(true);
 
     try {
-      // Send to API with form16_data if available
-      const response = await sendMessage(sessionId, text, userContext, form16Data);
+      const response = await sendMessage(sessionId, text, userContext);
       
       // Add assistant response
       const assistantMessage = {
@@ -113,7 +108,6 @@ function App() {
         await clearSession(sessionId);
         setMessages([]);
         setUserContext({});
-        setForm16Data(null);
         setSuggestions([
           "I'm a salaried employee",
           "I have business income",
@@ -179,15 +173,6 @@ function App() {
                 <span className="hidden sm:inline">Calculator</span>
               </button>
 
-              <button
-                onClick={() => setShowPayslipUpload(!showPayslipUpload)}
-                className={`btn-secondary flex items-center gap-2 px-3 py-2 text-sm ${
-                  showPayslipUpload ? 'bg-primary-600/20 border-primary-500/50' : ''
-                }`}
-              >
-                <FileUp className="w-4 h-4" />
-                <span className="hidden sm:inline">Upload</span>
-              </button>
               
               <button
                 onClick={handleClearChat}
@@ -311,81 +296,6 @@ function App() {
                 >
                   <TaxCalculator onCalculate={(result) => {
                     handleSendMessage(`I calculated tax of ₹${result.total_tax.toFixed(0)} on income of ₹${result.gross_income}`);
-                  }} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Payslip Upload */}
-            <AnimatePresence>
-              {showPayslipUpload && (
-                <motion.div
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                >
-                  <PayslipUpload onDataExtracted={(result) => {
-                    if (result.type === 'form16' && result.data) {
-                      // Store Form 16 data
-                      setForm16Data(result.data);
-                      const d = result.data;
-                      const fields = [
-                        { k: 'employee_name', l: 'Employee' },
-                        { k: 'pan', l: 'PAN' },
-                        { k: 'financial_year', l: 'FY' },
-                        { k: 'employer_name', l: 'Employer' },
-                        { k: 'gross_salary', l: 'Gross Salary' },
-                        { k: 'basic_salary', l: 'Basic' },
-                        { k: 'hra', l: 'HRA' },
-                        { k: 'tds_deducted', l: 'TDS' },
-                      ];
-                      const details = fields
-                        .map(f => {
-                            const value = d[f.k];
-                            if (!value) return null;
-                            if (typeof value === 'number') {
-                                return `${f.l}: ₹${Math.round(value).toLocaleString('en-IN')}`;
-                            }
-                            return `${f.l}: ${value}`;
-                        })
-                        .filter(Boolean)
-                        .join(', ');
-                      handleSendMessage(`I've uploaded my Form 16. Extracted data: ${details}. Please help me with tax planning and ITR filing.`);
-                    } else if (result.data) {
-                      // Handle payslip data
-                      setUserContext(prev => ({
-                        ...prev,
-                        ...result.data
-                      }));
-                      
-                      const d = result.data;
-                      const fields = [
-                        { k: 'employee_name', l: 'Employee' },
-                        { k: 'pan', l: 'PAN' },
-                        { k: 'pay_period', l: 'Period' },
-                        { k: 'salary_income', l: 'Basic' },
-                        { k: 'hra', l: 'HRA' },
-                        { k: 'conveyance', l: 'Conveyance' },
-                        { k: 'medical_allowance', l: 'Medical' },
-                        { k: 'special_allowance', l: 'Special' },
-                        { k: 'epf', l: 'EPF' },
-                        { k: 'professional_tax', l: 'PT' },
-                        { k: 'tax_deducted', l: 'TDS' },
-                        { k: 'net_pay', l: 'Net Pay' }
-                      ];
-                      const details = fields
-                        .map(f => {
-                            const value = d[f.k];
-                            if (!value) return null; // Excludes 0, "", null, undefined
-                            if (typeof value === 'number') {
-                                return `${f.l}: ₹${Math.round(value).toLocaleString('en-IN')}`;
-                            }
-                            return `${f.l}: ${value}`;
-                        })
-                        .filter(Boolean)
-                        .join(', ');
-                      handleSendMessage(`I've uploaded my payslip. Extracted data: ${details}. Please help me with tax planning.`);
-                    }
                   }} />
                 </motion.div>
               )}
